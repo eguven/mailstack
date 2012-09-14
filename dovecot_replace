@@ -1,0 +1,66 @@
+
+protocols = imap imaps pop3 pop3s
+
+# for MS Outlook
+disable_plaintext_auth = no
+
+log_timestamp = "%Y-%m-%d %H:%M:%S "
+
+# static mail_location template will be overriden by
+# mail field in userdb
+mail_location = maildir:/var/spool/mail/{{mailownerusername}}/%d/%n/mail
+
+mail_privileged_group = mail
+
+protocol imap {
+}
+protocol pop3 {
+  pop3_uidl_format = %08Xu%08Xv
+}
+protocol managesieve {
+}
+
+protocol lda {
+  log_path = /var/log/dovecot-deliver.log
+  auth_socket_path = /var/run/dovecot/auth-master
+  postmaster_address = root@localhost
+  mail_plugins = sieve
+}
+
+auth default {
+
+  mechanisms = plain login
+
+  passdb sql {
+    args = /etc/dovecot/dovecot-sql.conf
+  }
+  userdb passwd {
+  }
+  userdb sql {
+    args = /etc/dovecot/dovecot-sql.conf
+  }
+  user = root
+  socket listen {
+    master {
+      path = /var/run/dovecot/auth-master
+      mode = 0600
+      user = virtual
+    }
+    client {
+    }
+  }
+
+  !include_try /etc/dovecot/auth.d/*.auth
+
+}
+
+dict {
+
+}
+
+plugin {
+
+}
+
+!include_try /etc/dovecot/conf.d/*.conf
+

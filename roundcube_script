@@ -1,0 +1,48 @@
+#!/bin/bash
+
+echo
+read -p "This installs and sets up Roundcube(-pgsql) with common settings. This needs to be run as superuser. Continue? (y/n) " -n 1
+if [[ ! $REPLY =~ ^[Yy]$ ]]
+then
+    echo -e "\n"
+    exit 1
+fi
+
+sudo apt-get install apache2 php5 php5-pgsql roundcube roundcube-pgsql
+
+# Apache configuration
+#sudo a2enmod ssl
+#sudo a2ensite default-ssl
+#sudo a2enmod proxy_http
+
+# Roundcube configuration
+
+defaulthost="ssl://localhost:993"
+smtpserver='localhost'
+smtpport=587
+createdefaultfolders='TRUE'
+forcehttps='TRUE'
+# set port here if different than 443 (Roundcube default: FALSE)
+passwordcharset='UTF-8'
+# uncomment the appropriate line in 'sed' below if you don't use default
+# language='en_US'
+
+RC_LOGO=$(dirname $0)/roundcube_logo.png
+
+# uncomment Aliases (l3,4)
+sudo sed -i 's/#[ ]*\(Alias\)/\1/' /etc/roundcube/apache.conf
+
+sudo sed -i -e "s|\(\$rcmail_config\['default_host'\] = \).*|\1'$defaulthost';|" \
+    -e "s|\(\$rcmail_config\['smtp_server'\] = \).*|\1'$smtpserver';|" \
+    -e "s|\(\$rcmail_config\['smtp_port'\] = \).*|\1$smtpport;|" \
+    -e "s|\(\$rcmail_config\['create_default_folders'\] = \).*|\1$createdefaultfolders;|" \
+    -e "s|\(\$rcmail_config\['force_https'\] = \).*|\1$forcehttps;|" \
+    -e "s|\(\$rcmail_config\['password_charset'\] = \).*|\1'$passwordcharset';|" \
+# language line
+#    -e "s|\(\$rcmail_config\['language'\] = \).*|\1'$language';|" \
+  /etc/roundcube/main.inc.php
+
+sudo mv /var/lib/roundcube/skins/default/images/roundcube_logo.png /var/lib/roundcube/skins/default/images/roundcube_logo.png.orig
+sudo cp $RC_LOGO /var/lib/roundcube/skins/default/images/roundcube_logo.png
+
+sudo apache2ctl restart

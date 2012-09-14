@@ -1,0 +1,19 @@
+#!/bin/bash
+
+echo
+
+read -p "\
+WARNING: Development/Testing ONLY. This will completely remove the installed mailserver stack including any configuration and data as well as databases. This will NOT remove any system users. Are you sure you want to proceed? (y/n) " -n 1
+if [[ $REPLY =~ ^[Yy]$ ]]
+then
+  echo
+  sudo apt-get --purge remove roundcube roundcube-core roundcube-pgsql mail-stack-delivery postfix postfix-pgsql dovecot-common dovecot-imapd dovecot-pop3d postgresql postgresql-8.4 postgresql-client-common postgresql-common clamav-base libclamav6 clamav-daemon clamav-freshclam amavisd-new spamassassin
+  sudo apt-get autoremove
+  sudo rm /etc/dovecot/*.bckp /etc/mailname
+
+else
+  echo -e "\n"
+
+fi
+
+

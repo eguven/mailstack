@@ -1,0 +1,12 @@
+
+# adding virtual domain and virtual alias mapping
+# (virtual mailboxes skipped, Dovecot LDA handles that
+virtual_alias_maps = 
+virtual_mailbox_domains = 
+
+# use Dovecot LDA as MDA
+virtual_transport = dovecot
+dovecot_destination_recipient_limit = 1
+
+# Content Filter
+content_filter = amavis:[127.0.0.1]:10024

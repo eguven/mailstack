@@ -1,0 +1,165 @@
+#!/bin/bash
+
+echo
+read -p "Make sure you have set 'fqdn' variable in the script. Otherwise 'hostname --fqdn' is used. Make sure to change values in CONFIG CONSTANTS section. This needs to be run as superuser. Continue? (y/n) " -n 1
+if [[ ! $REPLY =~ ^[Yy]$ ]]
+then
+    echo -e "\n"
+    exit 1
+fi
+
+# CONFIG FILES
+postfixmainfile="postfix_main_append"
+postfixmasterfile="postfix_master_append"
+dovecotmainfile="dovecot_replace"
+pgsqlsetupfile="pgsql_setup.sql"
+amavisuserfile="amavis_50-user_replace"
+
+# CONFIG CONSTANTS
+
+# (FQDN) hostname for amavisd (default=`hostname --fqdn`)
+# leave empty to use default
+fqdn=
+
+mailname=$(hostname) # to be used in /etc/mailname
+mailownerusername="virtual" # user to own maildir folders (this will be created)
+mailowneruserid=5000 # uid of the user above
+virtualmailfolder="/var/spool/mail/$mailownerusername" # root of maildir folders
+maildbusername="maildbuser" # Read-only user to connect to PostgreSQL for Postfix and Dovecot
+maildbuserpw="maildbpassword" # Password of the above user
+maildbname="maildb" # Database name (for domains, aliases, users.. NOT for Roundcube)
+
+# END CONFIG CONSTANTS
+
+virtual_alias_maps="/etc/postfix/pgsql_aliases.cf"
+virtual_mailbox_domains="/etc/postfix/pgsql_domains.cf"
+
+DIRNAME=$(dirname $0)
+
+# install
+sudo apt-get install mail-stack-delivery postfix-pgsql postgresql \
+  clamav-base libclamav6 clamav-daemon clamav-freshclam amavisd-new spamassassin
+
+# set /etc/mailname
+if [ -e /etc/mailname ]
+  then if grep $mailname /etc/mailname
+    then echo "/etc/mailname was correct"
+  fi
+  else sudo echo $mailname > /etc/mailname
+fi
+
+# check postmaster alias in /etc/aliases
+if grep "postmaster:[ ]*root[ ]*$" /etc/aliases
+  then echo "Postmaster alias found"
+  else echo "postmaster:    root" >> /etc/aliases
+fi
+
+sudo postalias /etc/aliases
+
+# create user owning virtual mail folders
+sudo mkdir $virtualmailfolder
+sudo groupadd --system $mailownerusername -g $mailowneruserid
+sudo useradd --system $mailownerusername -u $mailowneruserid -g $mailowneruserid
+sudo chown -R $mailownerusername:$mailownerusername $virtualmailfolder
+
+# additions to /etc/postfix/main.cf
+cat $DIRNAME/$postfixmainfile | \
+  sed -e 's|virtual_alias_maps = |&pgsql:'$virtual_alias_maps'|' \
+  -e 's|virtual_mailbox_domains = |&pgsql:'$virtual_mailbox_domains'|' | \
+  sudo cat >> /etc/postfix/main.cf
+
+# create *.cf for pgsql to be user by postfix
+echo -e "hosts = localhost\nuser = \npassword = \ndbname = " | \
+  sudo sed -e 's/user = /&'$maildbusername'/' \
+           -e 's/password = /&'$maildbuserpw'/' \
+           -e 's/dbname = /&'$maildbname'/' \
+  > $virtual_alias_maps
+
+sudo cp $virtual_alias_maps $virtual_mailbox_domains
+sudo echo query = "SELECT 1 FROM domains WHERE domain='%s'" >> $virtual_mailbox_domains
+sudo echo query = "SELECT destination FROM aliases WHERE source='%s'" >> $virtual_alias_maps
+sudo chgrp postfix $virtual_alias_maps $virtual_mailbox_domains
+sudo chmod o= $virtual_alias_maps $virtual_mailbox_domains
+
+# changes to /etc/postfix/master.cf
+
+sudo sed -i 's/#submission/submission/' /etc/postfix/master.cf 
+sudo sed -i ' '/pickup/' a \
+  -o content_filter=\
+  -o receive_override_options=no_header_body_checks' /etc/postfix/master.cf
+
+sed 's/{{mailownerusername}}/'$mailownerusername'/g' <$DIRNAME/$postfixmasterfile | \
+  sudo tee -a /etc/postfix/master.cf
+
+# Dovecot configuration
+# backup
+if [ -e /etc/dovecot/dovecot.conf ]
+  then sudo mv /etc/dovecot/dovecot.conf /etc/dovecot/dovecot.conf.bckp
+fi
+if [ -e /etc/dovecot/dovecot-sql.conf ]
+  then sudo mv /etc/dovecot/dovecot-sql.conf /etc/dovecot/dovecot-sql.conf.bckp
+fi
+
+sed 's/{{mailownerusername}}/'$mailownerusername'/g' <$DIRNAME/$dovecotmainfile >/tmp/dovecot.conf
+sudo cp /tmp/dovecot.conf /etc/dovecot/dovecot.conf
+sudo chgrp $mailownerusername /etc/dovecot/dovecot.conf
+sudo chmod g+r /etc/dovecot/dovecot.conf
+
+sudo touch /var/log/dovecot-deliver.log
+sudo chgrp $mailownerusername /var/log/dovecot-deliver.log
+sudo chmod 660 /var/log/dovecot-deliver.log
+
+echo -e "driver = pgsql\nconnect = host=localhost dbname= user= password=\ndefault_pass_scheme = PLAIN-MD5\npassword_query = SELECT id as user, password FROM users WHERE id = '%u'\nuser_query = SELECT mail, home, uid, gid FROM users WHERE id = '%u'" | \
+  sudo sed -e 's/dbname=/&'$maildbname'/' \
+           -e 's/user=/&'$maildbusername'/' \
+           -e 's/password=/&'$maildbuserpw'/' \
+  > /etc/dovecot/dovecot-sql.conf
+
+sudo chmod 600 /etc/dovecot/dovecot-sql.conf
+
+# Find Psql version and add config line for access
+# TODO: This is not necessarily a proper way of doing this but the only one
+# within my bash, regexp and PostgreSQL version naming knowledge
+
+# Works fine with Psql version 8.4.8 and directory 8.4
+pv=$(psql --version | sed -n 's/.* \([1-9].[0-9]\).*/\1/p')
+
+if [ -e /etc/postgresql/$pv/main/pg_hba.conf ]
+  then if grep "[ ]*host[ ]*all[ ]*all[ ]*127.0.0.1[ ]*255.255.255.255[ ]*password" /etc/postgresql/$pv/main/pg_hba.conf
+    then echo "pg_hba.conf is correct"
+  else sudo echo "host  all  all  127.0.0.1  255.255.255.255  password" >> /etc/postgresql/$pv/main/pg_hba.conf
+  fi
+else echo -e "\n### ATTENTION ###\n# /etc/postgresql/<version>/main/pg_hba.conf\n# needs to be modified manually\n#################\n"
+fi
+
+# PostgreSQL: User, DB and Tables for Postfix (domains, aliases) and Dovecot (users)
+
+sed -e 's/{{maildbusername}}/'$maildbusername'/g' \
+    -e 's/{{maildbuserpw}}/'$maildbuserpw'/g' \
+    -e 's/{{mailowneruserid}}/'$mailowneruserid'/g' \
+    -e 's/{{maildbname}}/'$maildbname'/' $DIRNAME/$pgsqlsetupfile | sudo -u postgres psql
+
+# Amavis
+sudo sed -i -e 's/.*\(@bypass_virus_checks_maps\)/\1/' -e 's/#\([ ]*\\%bypass_virus_checks\)/\1/' \
+            -e 's/.*\(@bypass_spam_checks_maps\)/\1/' -e 's/#\([ ]*\\%bypass_spam_checks\)/\1/' \
+            /etc/amavis/conf.d/15-content_filter_mode
+
+sudo cp $DIRNAME/$amavisuserfile /etc/amavis/conf.d/50-user
+
+if [ $fqdn ]
+  then sudo sed -i 's/#\(\$myhostname = "\).*\(";\)/\1'$fqdn'\2/' /etc/amavis/conf.d/05-node_id
+fi
+
+# Spamassassin
+sudo sed -i 's/\(ENABLED=\).*/\11/' /etc/default/spamassassin
+
+sudo adduser clamav amavis
+
+# Final Restarts
+sudo /etc/init.d/amavis stop
+sudo /etc/init.d/clamav-daemon stop
+sudo /etc/init.d/clamav-daemon start
+sudo /etc/init.d/amavis start
+sudo /etc/init.d/clamav-daemon start
+sudo postfix reload
+sudo /etc/init.d/dovecot restart

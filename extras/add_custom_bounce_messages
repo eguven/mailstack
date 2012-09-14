@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# This script will copy the filename given below to /etc/postfix (backing up existing
+# one if any) and set Postfix main.cf accordingly and reload Postfix
+
+bouncefilename=bounce_template.cf
+DIRNAME=$(dirname $0)
+
+if [ -e /etc/postfix/$bouncefilename ]
+  then
+    echo -e "/etc/postfix/$bouncefilename found. Renaming old file.\n"
+    sudo mv /etc/postfix/$bouncefilename /etc/postfix/$bouncefilename.old
+fi
+
+sudo cp $DIRNAME/$bouncefilename /etc/postfix/$bouncefilename
+
+if grep "/etc/postfix/$bouncefilename" /etc/postfix/main.cf
+  then echo -e "/etc/postfix/$bouncefilename found in /etc/postfix/main.cf. Hopefully its set up right.\n"
+  if grep "#.*/etc/postfix/$bouncefilename" /etc/postfix/main.cf
+    then
+      echo -e "It's commented out though.\n"
+  fi
+
+  else
+    echo -e "\n# Custom Bounce Messages\nbounce_template_file = /etc/postfix/$bouncefilename" >> /etc/postfix/main.cf
+    echo "Added -- bounce_template_file = /etc/postfix/$bouncefilename -- to /etc/postfix/main.cf\nReloading Postfix.\n"
+    sudo /etc/init.d/postfix reload
+fi
+
+
